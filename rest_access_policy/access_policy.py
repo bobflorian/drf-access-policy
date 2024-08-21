@@ -61,6 +61,7 @@ class AccessPolicy(permissions.BasePermission):
 
     def has_permission(self, request, view) -> bool:
         action = self._get_invoked_action(view)
+        print(f"Checking access for {action} action on {view.__class__.__name__}")
         statements = self.get_policy_statements(request, view)
 
         if len(statements) == 0:
@@ -78,7 +79,9 @@ class AccessPolicy(permissions.BasePermission):
             return []
 
         prefetch_related_objects([user], "groups")
-        return [g.name for g in user.groups.all()]
+        user_groups = [g.name for g in user.groups.all()]
+        print(f"User groups: {user_groups}")
+        return user_groups
 
     @classmethod
     def scope_queryset(cls, request, qs):
@@ -90,15 +93,18 @@ class AccessPolicy(permissions.BasePermission):
 
     def _get_invoked_action(self, view) -> str:
         """
-        If a CBV, the name of the method. If a regular function view,
-        the name of the function.
+        If a CBV, return the name of the HTTP method being invoked.
         """
+        # Check if it's a Django Rest Framework ViewSet, which has an 'action' attribute.
         if hasattr(view, "action"):
-            if hasattr(view, "action_map"):
-                return view.action or list(view.action_map.values())[0]
             return view.action
+        
+        # If it's a standard CBV, return the HTTP method name as the action.
+        if hasattr(view, "request"):
+            return view.request.method.lower()
 
-        elif hasattr(view, "__class__"):
+        # Fallback: use the class name, but this is not ideal for action matching.
+        if hasattr(view, "__class__"):
             return view.__class__.__name__
 
         raise AccessPolicyException("Could not determine action of request")
@@ -106,24 +112,31 @@ class AccessPolicy(permissions.BasePermission):
     def _evaluate_statements(
         self, statements: List[Union[dict, Statement]], request, view, action: str
     ) -> bool:
+        print(f"Evaluating statements for action: {action} on view: {view.__class__.__name__}")
         statements = self._normalize_statements(statements)
         matched = self._get_statements_matching_principal(request, statements)
         matched = self._get_statements_matching_action(request, action, matched)
 
+        print(f"Statements after matching principals and actions: {matched}")
+
         matched = self._get_statements_matching_conditions(
             request, view, action=action, statements=matched, is_expression=False
         )
-
         matched = self._get_statements_matching_conditions(
             request, view, action=action, statements=matched, is_expression=True
         )
 
+        print(f"Statements after matching conditions: {matched}")
+
         denied = [_ for _ in matched if _["effect"] != "allow"]
 
         if len(matched) == 0 or len(denied) > 0:
+            print("Access denied due to no matching allow statement or due to a deny statement.")
             return False
 
+        print("Access allowed.")
         return True
+
 
     def _normalize_statements(
         self, statements: List[Union[dict, Statement]]
@@ -162,6 +175,8 @@ class AccessPolicy(permissions.BasePermission):
         user_roles = None
         matched = []
 
+        print(f"Evaluating principals for user: {user}")
+
         for statement in statements:
             principals = statement["principal"]
             found = False
@@ -181,16 +196,22 @@ class AccessPolicy(permissions.BasePermission):
             else:
                 if not user_roles:
                     user_roles = cls().get_user_group_values(user)
+                    print(f"User roles: {user_roles}")
 
                 for user_role in user_roles:
                     if cls.group_prefix + user_role in principals:
                         found = True
+                        print(f"Matched principal: {user_role}")
                         break
 
             if found:
+                print(f"Principal matched for statement: {statement}")
                 matched.append(statement)
+            else:
+                print(f"Principal did not match for statement: {statement}")
 
         return matched
+
 
     def _get_statements_matching_action(
         self, request, action: str, statements: List[dict]
@@ -271,28 +292,27 @@ class AccessPolicy(permissions.BasePermission):
         return matched
 
     def _check_condition(self, condition: str, request, view, action: str):
-        """
-        Evaluate a custom context condition; if method does not exist on
-        the access policy class, then return False.
-        Condition value can contain a value that is passed to method, if
-        formatted as `<method_name>:<arg_value>`.
-        """
         parts = condition.split(":", 1)
         method_name = parts[0]
         arg = parts[1] if len(parts) == 2 else None
         method = self._get_condition_method(method_name)
+
+        print(f"Checking condition: {condition}, with method: {method_name}")
 
         if arg is not None:
             result = method(request, view, action, arg)
         else:
             result = method(request, view, action)
 
+        print(f"Condition {condition} returned: {result}")
+
         if type(result) is not bool:
             raise AccessPolicyException(
-                f"condition '{condition}' must return true/false, not {type(result)}"
+                f"Condition '{condition}' must return true/false, not {type(result)}"
             )
 
         return result
+
 
     def _get_condition_method(self, method_name: str):
         if hasattr(self, method_name):

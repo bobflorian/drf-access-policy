@@ -60,8 +60,7 @@ class AccessPolicy(permissions.BasePermission):
     id_prefix = "id:"
 
     def has_permission(self, request, view) -> bool:
-        action = self._get_invoked_action(view)
-        print(f"Checking access for {action} action on {view.__class__.__name__}")
+        action = self._get_invoked_action(view)        
         statements = self.get_policy_statements(request, view)
 
         if len(statements) == 0:
@@ -79,10 +78,8 @@ class AccessPolicy(permissions.BasePermission):
             return []
 
         prefetch_related_objects([user], "groups")
-        user_groups = [g.name for g in user.groups.all()]
-        print(f"User groups: {user_groups}")
-        return user_groups
-
+        return [g.name for g in user.groups.all()]        
+        
     @classmethod
     def scope_queryset(cls, request, qs):
         return qs.none()
@@ -111,13 +108,10 @@ class AccessPolicy(permissions.BasePermission):
 
     def _evaluate_statements(
         self, statements: List[Union[dict, Statement]], request, view, action: str
-    ) -> bool:
-        print(f"Evaluating statements for action: {action} on view: {view.__class__.__name__}")
+    ) -> bool:        
         statements = self._normalize_statements(statements)
         matched = self._get_statements_matching_principal(request, statements)
-        matched = self._get_statements_matching_action(request, action, matched)
-
-        print(f"Statements after matching principals and actions: {matched}")
+        matched = self._get_statements_matching_action(request, action, matched)        
 
         matched = self._get_statements_matching_conditions(
             request, view, action=action, statements=matched, is_expression=False
@@ -126,15 +120,11 @@ class AccessPolicy(permissions.BasePermission):
             request, view, action=action, statements=matched, is_expression=True
         )
 
-        print(f"Statements after matching conditions: {matched}")
-
         denied = [_ for _ in matched if _["effect"] != "allow"]
 
-        if len(matched) == 0 or len(denied) > 0:
-            print("Access denied due to no matching allow statement or due to a deny statement.")
+        if len(matched) == 0 or len(denied) > 0:            
             return False
 
-        print("Access allowed.")
         return True
 
 
@@ -175,8 +165,6 @@ class AccessPolicy(permissions.BasePermission):
         user_roles = None
         matched = []
 
-        print(f"Evaluating principals for user: {user}")
-
         for statement in statements:
             principals = statement["principal"]
             found = False
@@ -196,19 +184,14 @@ class AccessPolicy(permissions.BasePermission):
             else:
                 if not user_roles:
                     user_roles = cls().get_user_group_values(user)
-                    print(f"User roles: {user_roles}")
 
                 for user_role in user_roles:
                     if cls.group_prefix + user_role in principals:
                         found = True
-                        print(f"Matched principal: {user_role}")
                         break
 
             if found:
-                print(f"Principal matched for statement: {statement}")
                 matched.append(statement)
-            else:
-                print(f"Principal did not match for statement: {statement}")
 
         return matched
 
@@ -297,14 +280,10 @@ class AccessPolicy(permissions.BasePermission):
         arg = parts[1] if len(parts) == 2 else None
         method = self._get_condition_method(method_name)
 
-        print(f"Checking condition: {condition}, with method: {method_name}")
-
         if arg is not None:
             result = method(request, view, action, arg)
         else:
             result = method(request, view, action)
-
-        print(f"Condition {condition} returned: {result}")
 
         if type(result) is not bool:
             raise AccessPolicyException(
